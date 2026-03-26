@@ -83,19 +83,43 @@ class GCNResnet(nn.Module):
         feature = self.features(feature)
         feature = self.pooling(feature)
         feature = feature.view(feature.size(0), -1)
+        controller = getattr(self.gtn, "_avic_controller", None)
+        layer_idx = getattr(self.gtn, "_avic_layer_idx", 0)
+        if controller is not None:
+            feature = controller.patch_tensor(f"layer{layer_idx}.image_feat", feature, select_dim=1)
+            controller.put_tensor(f"layer{layer_idx}.image_feat", feature)
 
         inp = inp[0]
 
         adj, _ = self.gtn(self.A)
-        adj = torch.squeeze(adj, 0) + torch.eye(self.num_classes).type(torch.FloatTensor).cuda()
+        adj = torch.squeeze(adj, 0)
+        device = adj.device
+        adj = adj + torch.eye(self.num_classes, device=device).type(torch.FloatTensor).to(device)
         adj = gen_adj(adj)
+        if controller is not None:
+            controller.put_tensor(f"layer{layer_idx}.norm_adj", adj)
+            cache = controller.get_cache()
+            conv1_adj = cache.get(f"layer{layer_idx}.conv1.adj")
+            conv2_adj = cache.get(f"layer{layer_idx}.conv2.adj")
+            if conv1_adj is not None:
+                controller.put_tensor(f"layer{layer_idx}.conv1.msg", torch.matmul(conv1_adj.squeeze(0), inp))
+            if conv2_adj is not None:
+                controller.put_tensor(f"layer{layer_idx}.conv2.msg", torch.matmul(conv2_adj.squeeze(0), inp))
         
         x = self.gc1(inp, adj)
+        if controller is not None:
+            controller.put_tensor(f"layer{layer_idx}.gc1_pre", x)
         x = self.relu(x)
+        if controller is not None:
+            controller.put_tensor(f"layer{layer_idx}.gc1_post", x)
         x = self.gc2(x, adj)
+        if controller is not None:
+            controller.put_tensor(f"layer{layer_idx}.gc2_out", x)
 
         x = x.transpose(0, 1)
         x = torch.matmul(feature, x)
+        if controller is not None:
+            controller.put_tensor(f"layer{layer_idx}.logits", x)
         return x
 
     def get_config_optim(self, lr, lrp):
@@ -111,5 +135,11 @@ def gcn_resnet101(num_classes, t, pretrained=True, adj_files=None, in_channel=30
     return GCNResnet(model, num_classes, t=t, adj_files=adj_files, in_channel=in_channel)
 
 def gcn_resnext50_32x4d_swsl(num_classes, t, pretrained=True, adj_files=None, in_channel=300):
-    model = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', 'resnext50_32x4d_swsl')
+    if pretrained:
+        model = torch.hub.load('facebookresearch/semi-supervised-ImageNet1K-models', 'resnext50_32x4d_swsl')
+    else:
+        try:
+            model = models.resnext50_32x4d(weights=None)
+        except TypeError:
+            model = models.resnext50_32x4d(pretrained=False)
     return GCNResnet(model, num_classes, t=t, adj_files=adj_files, in_channel=in_channel)

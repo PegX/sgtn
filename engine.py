@@ -251,8 +251,10 @@ class Engine(object):
 
             self.on_start_batch(True, model, criterion, data_loader, optimizer)
 
-            if self.state['use_gpu']:
-                self.state['target'] = self.state['target'].cuda(async=True)
+            #if self.state['use_gpu']:
+                #self.state['target'] = self.state['target'].cuda(async=True)
+            if self.state['use_gpt']:
+                self.state['target'] = self.state['target'].mps()
 
             self.on_forward(True, model, criterion, data_loader, optimizer)
 
@@ -288,7 +290,7 @@ class Engine(object):
             self.on_start_batch(False, model, criterion, data_loader)
 
             if self.state['use_gpu']:
-                self.state['target'] = self.state['target'].cuda(async=True)
+                self.state['target'] = self.state['target'].mpsm)
 
             self.on_forward(False, model, criterion, data_loader)
 

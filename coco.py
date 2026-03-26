@@ -17,6 +17,16 @@ def download_coco2014(root, phase):
         os.makedirs(root)
     tmpdir = os.path.join(root, 'tmp/')
     data = os.path.join(root, 'data/')
+    img_data = os.path.join(data, '{}2014'.format(phase))
+    annotations_data = os.path.join(data, 'annotations')
+    anno = os.path.join(data, '{}_anno.json'.format(phase))
+    category_json = os.path.join(data, 'category.json')
+
+    # Skip network access when the extracted dataset and metadata already exist.
+    if os.path.exists(img_data) and os.path.exists(annotations_data) and os.path.exists(anno) and os.path.exists(category_json):
+        print('[dataset] Existing extracted COCO data found. Skip download.')
+        return
+
     if not os.path.exists(data):
         os.makedirs(data)
     if not os.path.exists(tmpdir):

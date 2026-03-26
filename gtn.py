@@ -52,15 +52,16 @@ class GTN(nn.Module):
         return H_
 
     def norm(self, H, add=False):
+        device = H.device
         H = H.t()
         if add == False:
-            H = H*((torch.eye(H.shape[0])==0).type(torch.FloatTensor))
+            H = H * ((torch.eye(H.shape[0], device=device) == 0).type(torch.FloatTensor).to(device))
         else:
-            H = H*((torch.eye(H.shape[0])==0).type(torch.FloatTensor)) + torch.eye(H.shape[0]).type(torch.FloatTensor)
+            H = H * ((torch.eye(H.shape[0], device=device) == 0).type(torch.FloatTensor).to(device)) + torch.eye(H.shape[0], device=device).type(torch.FloatTensor).to(device)
         deg = torch.sum(H, dim=1)
         deg_inv = deg.pow(-1)
         deg_inv[deg_inv == float('inf')] = 0
-        deg_inv = deg_inv*torch.eye(H.shape[0]).type(torch.FloatTensor)
+        deg_inv = deg_inv * torch.eye(H.shape[0], device=device).type(torch.FloatTensor).to(device)
         H = torch.mm(deg_inv,H)
         H = H.t()
         return H
@@ -102,15 +103,21 @@ class GTLayer(nn.Module):
             self.conv1 = GTConv(in_channels, out_channels)
     
     def forward(self, A, H_=None):
+        controller = getattr(self, "_avic_controller", None)
+        layer_idx = getattr(self, "_avic_layer_idx", 0)
         if self.first == True:
             a = self.conv1(A)
             b = self.conv2(A)
             H = torch.bmm(a,b)
             W = [(F.softmax(self.conv1.weight, dim=1)).detach(),(F.softmax(self.conv2.weight, dim=1)).detach()]
+            if controller is not None:
+                controller.put_tensor(f"layer{layer_idx}.meta_adj", H)
         else:
             a = self.conv1(A)
             H = torch.bmm(H_,a)
             W = [(F.softmax(self.conv1.weight, dim=1)).detach()]
+            if controller is not None:
+                controller.put_tensor(f"layer{layer_idx}.meta_adj", H)
         return H,W
 
 class GTConv(nn.Module):
@@ -132,5 +139,30 @@ class GTConv(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, A):
-        A = torch.sum(A.cuda()*F.softmax(self.weight, dim=1).cuda(), dim=1)
-        return A
+        controller = getattr(self, "_avic_controller", None)
+        layer_idx = getattr(self, "_avic_layer_idx", 0)
+        unit_name = getattr(self, "_avic_unit_name", "conv")
+
+        mix = F.softmax(self.weight, dim=1)
+        if controller is not None:
+            controller.put_tensor(
+                f"layer{layer_idx}.{unit_name}.mix",
+                mix.detach().squeeze(-1).squeeze(-1),
+            )
+
+        A_dev = A.to(mix.device)
+        out = torch.sum(A_dev * mix.to(A_dev.device), dim=1)
+
+        if controller is not None:
+            for out_idx in range(out.shape[0]):
+                if controller.should_ablate(layer_idx, unit_name, out_idx):
+                    out = out.clone()
+                    out[out_idx] = 0.0
+            out = controller.patch_tensor(
+                f"layer{layer_idx}.{unit_name}.adj",
+                out,
+                select_dim=0,
+            )
+            controller.put_tensor(f"layer{layer_idx}.{unit_name}.adj", out)
+
+        return out
